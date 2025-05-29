@@ -1,8 +1,10 @@
-//SPDX-License-Identifier:GPL-3.0
+//SPDX-License-Identifier:UNLICENSED
 
 pragma solidity >=0.7.0 <0.9.0;
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract SocialMedia {
+contract SocialMedia is ReentrancyGuard, Pausable {
     event newUserRegister(address indexed userAddress, string UserName);
     event postCreated(address indexed userAddress, uint256 _id, string content);
     event followingUpdated(
@@ -12,6 +14,17 @@ contract SocialMedia {
     event followerUpdated(
         address indexed myAccount,
         address indexed followerAddress
+    );
+    event commented(
+        address indexed commenter,
+        uint256 postId,
+        address indexed postAdress,
+        string content
+    );
+    event Liked(
+        address indexed Liker,
+        uint256 postId,
+        address indexed postAddress
     );
     struct User {
         address UserAddress;
@@ -29,22 +42,39 @@ contract SocialMedia {
         uint256 commentsCount;
     }
 
+    struct Comment {
+        address commenter;
+        string content;
+        uint256 timestamp;
+    }
+
     mapping(address => User) public user_profile;
     address[] public registeredUsers;
 
     mapping(address => address[]) public allFollowing;
     mapping(address => address[]) public allFollowers;
-    mapping(address => Post[]) public posts;
+
+    uint256 public nextPostId;
+
+    mapping(address => mapping(uint256 => Post)) public posts;
+    mapping(address => uint256[]) public userPosts;
+
     mapping(address => mapping(address => bool)) public isFollowing;
 
-    // all  liked address-> ek post address hoga  uski  id ->
+    // Mapping from post owner to post ID to liker address to boolean
+    mapping(address => mapping(uint256 => mapping(address => bool)))
+        public postLikes;
+    // Mapping from post owner to post ID to array of comments
+    mapping(address => mapping(uint256 => Comment[])) public postComments;
 
-    //   function  for  registration
+    // Mapping from user address to a mapping of postId to a boolean indicating if the user liked the post
+    mapping(address => mapping(uint256 => bool)) public hasLiked;
 
-    //   function  for  registration
-
-    function register(string memory bio, string memory username) external {
-        //  user is   already register or not
+    function register(string memory bio, string memory username)
+        external
+        nonReentrant
+        whenNotPaused
+    {
         require(
             !user_profile[msg.sender].isRegister,
             "User is Already Register"
@@ -64,54 +94,109 @@ contract SocialMedia {
         emit newUserRegister(msg.sender, username);
     }
 
-    // testing  ->  every user  call this  function  only one time
-    //  if secong time called by someone they will give
-    //  a an error msg which  is u are alredy registered.
-    // and also if u are   adding empty string  in the user name then  the error-> username can't be  empty
-
-    //   function   -> user can call the function to create post
-    //  post  id  and post content
-    //  har user ka  multiple post  hoga
-    // addresss-> post[]
-
-    function createPost(string memory _content) external {
+    function createPost(string memory _content)
+        external
+        whenNotPaused
+        nonReentrant
+    {
+        require(user_profile[msg.sender].isRegister, "You aren't registered");
+        require(bytes(_content).length > 0, "Content cannot be empty");
         require(
-            user_profile[msg.sender].isRegister,
-            "You aren't doing any registration"
-        );
-        require(
-            bytes(_content).length > 0,
-            "can not add empty string in content"
-        );
-        require(
-            posts[msg.sender].length < 10,
-            "you can add upto 10 posts only"
+            userPosts[msg.sender].length < 10,
+            "Maximum of 10 posts allowed"
         );
 
-        uint256 _postId = posts[msg.sender].length;
-
-        posts[msg.sender].push(
-            Post({
-                postId: _postId,
-                content: _content,
-                likesCount: 0,
-                commentsCount: 0
-            })
-        );
-
-        // update postCount
+        uint256 postId = nextPostId++;
+        posts[msg.sender][postId] = Post({
+            postId: postId,
+            content: _content,
+            likesCount: 0,
+            commentsCount: 0
+        });
+        userPosts[msg.sender].push(postId);
         user_profile[msg.sender].totalPost++;
-        emit postCreated(msg.sender, _postId, _content);
+
+        emit postCreated(msg.sender, postId, _content);
     }
 
-    // ab user krega   add friend
+    function deletePost(uint256 postId) external whenNotPaused {
+        require(user_profile[msg.sender].isRegister, "User not registered");
+        require(
+            posts[msg.sender][postId].postId == postId,
+            "Post does not exist"
+        );
 
-    //  address->    following[]->  address-> address[]
-    // check friendAddress-> register h ya ni h
+        delete posts[msg.sender][postId];
+        user_profile[msg.sender].totalPost--;
 
-    //  agar hain toh usko follow krne denge
+        uint256[] storage postIds = userPosts[msg.sender];
+        for (uint256 i = 0; i < postIds.length; i++) {
+            if (postIds[i] == postId) {
+                postIds[i] = postIds[postIds.length - 1];
+                postIds.pop();
+                break;
+            }
+        }
 
-    function follow(address friendAddress) external {
+        // Delete associated comments
+        delete postComments[msg.sender][postId];
+    }
+
+    function addComment(
+        address postOwner,
+        uint256 postId,
+        string memory content
+    ) external whenNotPaused {
+        require(user_profile[msg.sender].isRegister, "User not registered");
+        require(
+            posts[postOwner][postId].postId == postId,
+            "Post does not exist"
+        );
+        require(bytes(content).length > 0, "Comment cannot be empty");
+
+        Comment memory newComment = Comment({
+            commenter: msg.sender,
+            content: content,
+            timestamp: block.timestamp
+        });
+
+        postComments[postOwner][postId].push(newComment);
+        posts[postOwner][postId].commentsCount++;
+
+        emit commented(msg.sender, postId, postOwner, content);
+    }
+
+    function deleteComment(
+        address postOwner,
+        uint256 postId,
+        uint256 commentIndex
+    ) external whenNotPaused {
+        require(user_profile[msg.sender].isRegister, "User not registered");
+        require(
+            posts[postOwner][postId].postId == postId,
+            "Post does not exist"
+        );
+        require(
+            postComments[postOwner][postId].length > commentIndex,
+            "Invalid comment index"
+        );
+        require(
+            postComments[postOwner][postId][commentIndex].commenter ==
+                msg.sender,
+            "Not your comment"
+        );
+
+        uint256 lastIndex = postComments[postOwner][postId].length - 1;
+        if (commentIndex != lastIndex) {
+            postComments[postOwner][postId][commentIndex] = postComments[
+                postOwner
+            ][postId][lastIndex];
+        }
+        postComments[postOwner][postId].pop();
+        posts[postOwner][postId].commentsCount--;
+    }
+
+    function follow(address friendAddress) external whenNotPaused {
         require(user_profile[msg.sender].isRegister, "you are not registerer");
         require(
             user_profile[friendAddress].isRegister ||
@@ -122,7 +207,7 @@ contract SocialMedia {
         require(friendAddress != msg.sender, "you cant follow yourself");
         require(
             isFollowing[msg.sender][friendAddress] == false,
-            "you are already following this user"
+            "you are alredy following this user"
         );
 
         user_profile[friendAddress].follower++;
@@ -138,7 +223,7 @@ contract SocialMedia {
 
     //  user -> follow krke unfollow v krksta h
 
-    function unfollow(address unfollowAddress) external {
+    function unfollow(address unfollowAddress) external whenNotPaused {
         require(user_profile[msg.sender].isRegister);
         require(
             user_profile[unfollowAddress].isRegister ||
@@ -154,26 +239,17 @@ contract SocialMedia {
 
         isFollowing[msg.sender][unfollowAddress] = false;
 
-        //  remove   unfollow address from the array  following
-        //  mere following list se  vo address remove hoga
         for (uint256 i = 0; i < allFollowing[msg.sender].length; i++) {
             if (allFollowing[msg.sender][i] == unfollowAddress) {
-                // //  remove this element from the array
-                // delete allFollowing[msg.sender][i];
-
                 allFollowing[msg.sender][i] = allFollowing[msg.sender][
                     allFollowing[msg.sender].length - 1
                 ];
-
-                // swap and pop
 
                 allFollowing[msg.sender].pop();
 
                 break;
             }
         }
-
-        // remove my adress to  follower list of unfollow address
 
         for (uint256 i = 0; i < allFollowers[unfollowAddress].length; i++) {
             if (allFollowers[unfollowAddress][i] == msg.sender) {
@@ -191,20 +267,37 @@ contract SocialMedia {
         emit followerUpdated(unfollowAddress, msg.sender);
     }
 
-    function addLikes(address postAddress, uint256 _postId) external {
-        require(user_profile[msg.sender].isRegister);
+    function likePost(address postOwner, uint256 postId) external nonReentrant {
+        require(user_profile[msg.sender].isRegister, "User not registered");
+        require(
+            posts[postOwner][postId].postId == postId,
+            "Post does not exist"
+        );
+        require(!hasLiked[msg.sender][postId], "Already liked this post");
 
-        require(posts[postAddress].length > 0, "you have not posted anything");
-        Post[] storage p = posts[postAddress];
-        p[_postId].likesCount++;
+        hasLiked[msg.sender][postId] = true;
+        posts[postOwner][postId].likesCount++;
+
+        emit Liked(msg.sender, postId, postOwner);
+    }
+
+    function unlikePost(address postOwner, uint256 postId)
+        external
+        nonReentrant
+    {
+        require(user_profile[msg.sender].isRegister, "User not registered");
+        require(
+            posts[postOwner][postId].postId == postId,
+            "Post does not exist"
+        );
+        require(hasLiked[msg.sender][postId], "You have not liked this post");
+
+        hasLiked[msg.sender][postId] = false;
+        posts[postOwner][postId].likesCount--;
     }
 
     function getAllRegisteredUsers() external view returns (address[] memory) {
         return registeredUsers;
-    }
-
-    function getUserPosts(address user) external view returns (Post[] memory) {
-        return posts[user];
     }
 
     function getFollowing(address user)
@@ -213,6 +306,15 @@ contract SocialMedia {
         returns (address[] memory)
     {
         return allFollowing[user];
+    }
+
+    function getUserPosts(address user) external view returns (Post[] memory) {
+        uint256[] storage postIds = userPosts[user];
+        Post[] memory userPostList = new Post[](postIds.length);
+        for (uint256 i = 0; i < postIds.length; i++) {
+            userPostList[i] = posts[user][postIds[i]];
+        }
+        return userPostList;
     }
 
     function getFollowers(address user)
@@ -246,5 +348,25 @@ contract SocialMedia {
             u.totalPost,
             u.isRegister
         );
+    }
+
+    function getLikesCount(address postOwner, uint256 postId)
+        external
+        view
+        returns (uint256)
+    {
+        require(
+            posts[postOwner][postId].postId == postId,
+            "Post does not exist"
+        );
+        return posts[postOwner][postId].likesCount;
+    }
+
+    function getComments(address postOwner, uint256 postId)
+        external
+        view
+        returns (Comment[] memory)
+    {
+        return postComments[postOwner][postId];
     }
 }
