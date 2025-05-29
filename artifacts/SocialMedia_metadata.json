@@ -511,11 +511,11 @@
 	},
 	"sources": {
 		"SocialMedia.sol": {
-			"keccak256": "0xfa2303e2244ea64e9422973368f393d2784e384f26b4b899f8babfda65ed1f68",
+			"keccak256": "0xb9696bcd25840592061322abee400fe264105c250bc260c3f5fe34f9fbbe08b1",
 			"license": "GPL-3.0",
 			"urls": [
-				"bzz-raw://308495a8ca01145b26648c967a5ead520464ce829fbd397b05d0e0865e2038cc",
-				"dweb:/ipfs/QmRR2QLLmTYZjtA4E5K8fG2VUZtwY98rXnqTNFE8znhCGo"
+				"bzz-raw://200680c255ef84d9aebba1558500a751777b7851c4136a199465f950d2244c14",
+				"dweb:/ipfs/QmXvv5NVjQRraDeHFmqvRSskeD9Mabw6qK8hWt3YRjN95a"
 			]
 		}
 	},

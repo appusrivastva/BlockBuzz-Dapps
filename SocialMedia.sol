@@ -122,7 +122,7 @@ contract SocialMedia {
         require(friendAddress != msg.sender, "you cant follow yourself");
         require(
             isFollowing[msg.sender][friendAddress] == false,
-            "you are alredy following this user"
+            "you are already following this user"
         );
 
         user_profile[friendAddress].follower++;
